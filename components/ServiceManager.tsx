@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { Plus, Edit, Trash2, Clock, DollarSign, Palette } from 'lucide-react'
 import { Service } from '@/lib/supabase'
+import toast from 'react-hot-toast'
 
 interface ServiceManagerProps {
   services: Service[]
