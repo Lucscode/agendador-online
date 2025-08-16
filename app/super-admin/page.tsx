@@ -1,7 +1,6 @@
 'use client'
-
 import { useState, useEffect } from 'react'
-import { Plus, Users, Building, Calendar, Settings, Eye, Edit, Trash2, Copy, ExternalLink } from 'lucide-react'
+import { Plus, Users, Building, Calendar, Settings, Eye, Edit, Trash2, Copy, ExternalLink, Mail, Link } from 'lucide-react'
 import { supabase, Professional, Service } from '@/lib/supabase'
 import toast from 'react-hot-toast'
 
@@ -12,30 +11,48 @@ interface ClientWithStats extends Professional {
   last_activity: string
 }
 
+interface InviteData {
+  id: string
+  invite_code: string
+  client_email: string | null
+  client_name: string | null
+  expires_at: string
+  used_at: string | null
+  is_active: boolean
+}
+
 export default function SuperAdminPage() {
   const [clients, setClients] = useState<ClientWithStats[]>([])
   const [loading, setLoading] = useState(true)
   const [showCreateForm, setShowCreateForm] = useState(false)
   const [selectedClient, setSelectedClient] = useState<Professional | null>(null)
   const [activeTab, setActiveTab] = useState<'overview' | 'clients' | 'analytics' | 'settings'>('overview')
+  const [showInviteModal, setShowInviteModal] = useState(false)
+  const [inviteForm, setInviteForm] = useState({
+    client_email: '',
+    client_name: '',
+    expires_in_hours: 24
+  })
+  const [clientInvites, setClientInvites] = useState<InviteData[]>([])
 
   useEffect(() => {
     loadClients()
+    loadInvites()
   }, [])
 
   const loadClients = async () => {
     try {
       setLoading(true)
       
-      // Buscar todos os profissionais
-      const { data: professionals, error: profError } = await supabase
+      // Carregar profissionais
+      const { data: professionals, error } = await supabase
         .from('professionals')
         .select('*')
         .order('created_at', { ascending: false })
 
-      if (profError) throw profError
+      if (error) throw error
 
-      // Buscar estatísticas para cada profissional
+      // Carregar estatísticas para cada profissional
       const clientsWithStats = await Promise.all(
         professionals.map(async (prof) => {
           // Contar serviços
@@ -43,6 +60,7 @@ export default function SuperAdminPage() {
             .from('services')
             .select('*', { count: 'exact', head: true })
             .eq('professional_id', prof.id)
+            .eq('is_active', true)
 
           // Contar agendamentos
           const { count: appointmentsCount } = await supabase
@@ -51,14 +69,17 @@ export default function SuperAdminPage() {
             .eq('professional_id', prof.id)
 
           // Calcular receita (simulado)
-          const revenue = (appointmentsCount || 0) * 50 // Média de R$ 50 por agendamento
+          const revenue = Math.random() * 5000 + 1000
+
+          // Última atividade (simulado)
+          const lastActivity = new Date(Date.now() - Math.random() * 30 * 24 * 60 * 60 * 1000).toLocaleDateString('pt-BR')
 
           return {
             ...prof,
             services_count: servicesCount || 0,
             appointments_count: appointmentsCount || 0,
-            revenue,
-            last_activity: prof.created_at
+            revenue: Math.round(revenue),
+            last_activity: lastActivity
           }
         })
       )
@@ -72,39 +93,105 @@ export default function SuperAdminPage() {
     }
   }
 
+  const loadInvites = async () => {
+    try {
+      const { data: invites, error } = await supabase
+        .from('client_invites')
+        .select('*')
+        .order('created_at', { ascending: false })
+
+      if (error) throw error
+      setClientInvites(invites || [])
+    } catch (error) {
+      console.error('Erro ao carregar convites:', error)
+    }
+  }
+
   const handleCreateClient = async (clientData: any) => {
     try {
       // Aqui você chamaria a função createNewClient do script
+      console.log('Criando cliente:', clientData)
       toast.success('Cliente criado com sucesso!')
       setShowCreateForm(false)
       loadClients()
     } catch (error) {
+      console.error('Erro ao criar cliente:', error)
       toast.error('Erro ao criar cliente')
     }
   }
 
   const copyClientLink = (slug: string) => {
-    const link = `https://seudominio.com/${slug}`
+    const link = `${window.location.origin}/${slug}`
     navigator.clipboard.writeText(link)
     toast.success('Link copiado para a área de transferência!')
   }
 
   const openClientLink = (slug: string) => {
-    const link = `/${slug}`
-    window.open(link, '_blank')
+    window.open(`/${slug}`, '_blank')
   }
 
   const deleteClient = async (clientId: string) => {
-    if (!confirm('Tem certeza que deseja remover este cliente? Esta ação não pode ser desfeita.')) {
-      return
-    }
+    if (!confirm('Tem certeza que deseja excluir este cliente?')) return
 
     try {
-      // Em produção, você implementaria a lógica de exclusão
-      toast.success('Cliente removido com sucesso!')
+      const { error } = await supabase
+        .from('professionals')
+        .delete()
+        .eq('id', clientId)
+
+      if (error) throw error
+
+      toast.success('Cliente excluído com sucesso!')
       loadClients()
     } catch (error) {
-      toast.error('Erro ao remover cliente')
+      console.error('Erro ao excluir cliente:', error)
+      toast.error('Erro ao excluir cliente')
+    }
+  }
+
+  const generateInvite = async () => {
+    if (!selectedClient) return
+
+    try {
+      const { data: invite, error } = await supabase.rpc('create_client_invite', {
+        p_professional_id: selectedClient.id,
+        p_client_email: inviteForm.client_email || null,
+        p_client_name: inviteForm.client_name || null,
+        p_expires_in_hours: inviteForm.expires_in_hours
+      })
+
+      if (error) throw error
+
+      toast.success('Convite gerado com sucesso!')
+      setShowInviteModal(false)
+      setInviteForm({ client_email: '', client_name: '', expires_in_hours: 24 })
+      loadInvites()
+    } catch (error) {
+      console.error('Erro ao gerar convite:', error)
+      toast.error('Erro ao gerar convite')
+    }
+  }
+
+  const copyInviteLink = (inviteCode: string) => {
+    const link = `${window.location.origin}/${inviteCode}`
+    navigator.clipboard.writeText(link)
+    toast.success('Link do convite copiado!')
+  }
+
+  const deleteInvite = async (inviteId: string) => {
+    try {
+      const { error } = await supabase
+        .from('client_invites')
+        .delete()
+        .eq('id', inviteId)
+
+      if (error) throw error
+
+      toast.success('Convite excluído com sucesso!')
+      loadInvites()
+    } catch (error) {
+      console.error('Erro ao excluir convite:', error)
+      toast.error('Erro ao excluir convite')
     }
   }
 
@@ -123,18 +210,17 @@ export default function SuperAdminPage() {
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
       <div className="bg-white shadow-sm border-b">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center py-6">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+          <div className="flex items-center justify-between">
             <div>
-              <h1 className="text-2xl font-bold text-gray-900">Super Admin</h1>
-              <p className="text-gray-600">Gerencie todos os clientes do sistema</p>
+              <h1 className="text-3xl font-bold text-gray-900">Super Admin Dashboard</h1>
+              <p className="text-gray-600">Gerencie todos os clientes da plataforma</p>
             </div>
-            
             <button
               onClick={() => setShowCreateForm(true)}
-              className="btn-primary flex items-center space-x-2"
+              className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg font-medium transition-colors duration-200 flex items-center space-x-2"
             >
-              <Plus className="h-4 w-4" />
+              <Plus className="h-5 w-5" />
               <span>Novo Cliente</span>
             </button>
           </div>
@@ -146,29 +232,37 @@ export default function SuperAdminPage() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <nav className="flex space-x-8">
             {[
-              { id: 'overview', name: 'Visão Geral', icon: Eye },
-              { id: 'clients', name: 'Clientes', icon: Users },
-              { id: 'analytics', name: 'Analytics', icon: Calendar },
-              { id: 'settings', name: 'Configurações', icon: Settings }
+              { id: 'overview', label: 'Visão Geral', icon: Building },
+              { id: 'clients', label: 'Clientes', icon: Users },
+              { id: 'analytics', label: 'Analytics', icon: Calendar },
+              { id: 'settings', label: 'Configurações', icon: Settings }
             ].map((tab) => (
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id as any)}
                 className={`py-4 px-1 border-b-2 font-medium text-sm flex items-center space-x-2 ${
                   activeTab === tab.id
-                    ? 'border-primary-500 text-primary-600'
+                    ? 'border-blue-500 text-blue-600'
                     : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
                 }`}
               >
                 <tab.icon className="h-4 w-4" />
-                <span>{tab.name}</span>
+                <span>{tab.label}</span>
               </button>
             ))}
+            
+            <a
+              href="/super-admin/invites"
+              className="py-4 px-1 border-b-2 border-transparent font-medium text-sm flex items-center space-x-2 text-gray-500 hover:text-gray-700 hover:border-gray-300"
+            >
+              <Mail className="h-4 w-4" />
+              <span>Convites</span>
+            </a>
           </nav>
         </div>
       </div>
 
-      {/* Main Content */}
+      {/* Content */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {activeTab === 'overview' && (
           <div className="space-y-6">
@@ -181,7 +275,7 @@ export default function SuperAdminPage() {
                   </div>
                   <div className="ml-4">
                     <p className="text-sm font-medium text-gray-600">Total de Clientes</p>
-                    <p className="text-2xl font-semibold text-gray-900">{clients.length}</p>
+                    <p className="text-2xl font-bold text-gray-900">{clients.length}</p>
                   </div>
                 </div>
               </div>
@@ -192,10 +286,8 @@ export default function SuperAdminPage() {
                     <Building className="h-6 w-6 text-green-600" />
                   </div>
                   <div className="ml-4">
-                    <p className="text-sm font-medium text-gray-600">Serviços Ativos</p>
-                    <p className="text-2xl font-semibold text-gray-900">
-                      {clients.reduce((sum, client) => sum + client.services_count, 0)}
-                    </p>
+                    <p className="text-sm font-medium text-gray-600">Negócios Ativos</p>
+                    <p className="text-2xl font-bold text-gray-900">{clients.filter(c => c.services_count > 0).length}</p>
                   </div>
                 </div>
               </div>
@@ -206,9 +298,9 @@ export default function SuperAdminPage() {
                     <Calendar className="h-6 w-6 text-yellow-600" />
                   </div>
                   <div className="ml-4">
-                    <p className="text-sm font-medium text-gray-600">Agendamentos</p>
-                    <p className="text-2xl font-semibold text-gray-900">
-                      {clients.reduce((sum, client) => sum + client.appointments_count, 0)}
+                    <p className="text-sm font-medium text-gray-600">Total Agendamentos</p>
+                    <p className="text-2xl font-bold text-gray-900">
+                      {clients.reduce((sum, c) => sum + c.appointments_count, 0)}
                     </p>
                   </div>
                 </div>
@@ -217,12 +309,12 @@ export default function SuperAdminPage() {
               <div className="bg-white rounded-lg shadow p-6">
                 <div className="flex items-center">
                   <div className="p-2 bg-purple-100 rounded-lg">
-                    <span className="text-2xl font-bold text-purple-600">R$</span>
+                    <Settings className="h-6 w-6 text-purple-600" />
                   </div>
                   <div className="ml-4">
-                    <p className="text-sm font-medium text-gray-600">Receita Total</p>
-                    <p className="text-2xl font-semibold text-gray-900">
-                      {clients.reduce((sum, client) => sum + client.revenue, 0).toLocaleString('pt-BR')}
+                    <p className="text-sm font-medium text-gray-600">Convites Ativos</p>
+                    <p className="text-2xl font-bold text-gray-900">
+                      {clientInvites.filter(i => i.is_active && !i.used_at).length}
                     </p>
                   </div>
                 </div>
@@ -238,30 +330,25 @@ export default function SuperAdminPage() {
                 {clients.slice(0, 5).map((client) => (
                   <div key={client.id} className="px-6 py-4 flex items-center justify-between">
                     <div className="flex items-center space-x-4">
-                      <div className="w-10 h-10 bg-primary-100 rounded-full flex items-center justify-center">
-                        <span className="text-primary-700 font-semibold">
-                          {client.business_name.charAt(0)}
+                      <div className="h-10 w-10 bg-gray-200 rounded-full flex items-center justify-center">
+                        <span className="text-sm font-medium text-gray-600">
+                          {client.business_name.charAt(0).toUpperCase()}
                         </span>
                       </div>
                       <div>
-                        <p className="font-medium text-gray-900">{client.business_name}</p>
-                        <p className="text-sm text-gray-500">{client.email}</p>
+                        <p className="text-sm font-medium text-gray-900">{client.business_name}</p>
+                        <p className="text-sm text-gray-500">{client.name}</p>
                       </div>
                     </div>
                     <div className="flex items-center space-x-2">
                       <button
-                        onClick={() => copyClientLink(client.slug)}
-                        className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg"
-                        title="Copiar link"
+                        onClick={() => {
+                          setSelectedClient(client)
+                          setShowInviteModal(true)
+                        }}
+                        className="text-blue-600 hover:text-blue-800 text-sm font-medium"
                       >
-                        <Copy className="h-4 w-4" />
-                      </button>
-                      <button
-                        onClick={() => openClientLink(client.slug)}
-                        className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg"
-                        title="Ver página"
-                      >
-                        <ExternalLink className="h-4 w-4" />
+                        Gerar Convite
                       </button>
                     </div>
                   </div>
@@ -272,102 +359,99 @@ export default function SuperAdminPage() {
         )}
 
         {activeTab === 'clients' && (
-          <div className="bg-white rounded-lg shadow">
-            <div className="px-6 py-4 border-b border-gray-200">
-              <h3 className="text-lg font-medium text-gray-900">Todos os Clientes</h3>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-gray-200">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Cliente
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Serviços
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Agendamentos
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Receita
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Status
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Ações
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="bg-white divide-y divide-gray-200">
-                  {clients.map((client) => (
-                    <tr key={client.id} className="hover:bg-gray-50">
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="flex items-center">
-                          <div className="w-10 h-10 bg-primary-100 rounded-full flex items-center justify-center">
-                            <span className="text-primary-700 font-semibold">
-                              {client.business_name.charAt(0)}
-                            </span>
-                          </div>
-                          <div className="ml-4">
-                            <div className="text-sm font-medium text-gray-900">
-                              {client.business_name}
-                            </div>
-                            <div className="text-sm text-gray-500">{client.email}</div>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        {client.services_count}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        {client.appointments_count}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        R$ {client.revenue.toLocaleString('pt-BR')}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <span className="inline-flex px-2 py-1 text-xs font-semibold rounded-full bg-green-100 text-green-800">
-                          Ativo
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                        <div className="flex items-center space-x-2">
-                          <button
-                            onClick={() => copyClientLink(client.slug)}
-                            className="text-primary-600 hover:text-primary-900"
-                            title="Copiar link"
-                          >
-                            <Copy className="h-4 w-4" />
-                          </button>
-                          <button
-                            onClick={() => openClientLink(client.slug)}
-                            className="text-primary-600 hover:text-primary-900"
-                            title="Ver página"
-                          >
-                            <ExternalLink className="h-4 w-4" />
-                          </button>
-                          <button
-                            onClick={() => setSelectedClient(client)}
-                            className="text-gray-600 hover:text-gray-900"
-                            title="Editar"
-                          >
-                            <Edit className="h-4 w-4" />
-                          </button>
-                          <button
-                            onClick={() => deleteClient(client.id)}
-                            className="text-red-600 hover:text-red-900"
-                            title="Excluir"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </button>
-                        </div>
-                      </td>
+          <div className="space-y-6">
+            {/* Clients List */}
+            <div className="bg-white rounded-lg shadow">
+              <div className="px-6 py-4 border-b border-gray-200">
+                <h3 className="text-lg font-medium text-gray-900">Todos os Clientes</h3>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="min-w-full divide-y divide-gray-200">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Cliente
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Serviços
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Agendamentos
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Última Atividade
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Ações
+                      </th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-gray-200">
+                    {clients.map((client) => (
+                      <tr key={client.id}>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <div className="flex items-center">
+                            <div className="h-10 w-10 bg-gray-200 rounded-full flex items-center justify-center">
+                              <span className="text-sm font-medium text-gray-600">
+                                {client.business_name.charAt(0).toUpperCase()}
+                              </span>
+                            </div>
+                            <div className="ml-4">
+                              <div className="text-sm font-medium text-gray-900">{client.business_name}</div>
+                              <div className="text-sm text-gray-500">{client.name}</div>
+                              <div className="text-sm text-gray-500">{client.email}</div>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                          {client.services_count}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                          {client.appointments_count}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                          {client.last_activity}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                          <div className="flex items-center space-x-2">
+                            <button
+                              onClick={() => {
+                                setSelectedClient(client)
+                                setShowInviteModal(true)
+                              }}
+                              className="text-blue-600 hover:text-blue-900 flex items-center space-x-1"
+                            >
+                              <Mail className="h-4 w-4" />
+                              <span>Convite</span>
+                            </button>
+                            <button
+                              onClick={() => copyClientLink(client.slug)}
+                              className="text-green-600 hover:text-green-900 flex items-center space-x-1"
+                            >
+                              <Copy className="h-4 w-4" />
+                              <span>Link</span>
+                            </button>
+                            <button
+                              onClick={() => openClientLink(client.slug)}
+                              className="text-purple-600 hover:text-purple-900 flex items-center space-x-1"
+                            >
+                              <ExternalLink className="h-4 w-4" />
+                              <span>Ver</span>
+                            </button>
+                            <button
+                              onClick={() => deleteClient(client.id)}
+                              className="text-red-600 hover:text-red-900 flex items-center space-x-1"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                              <span>Excluir</span>
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
         )}
@@ -375,17 +459,89 @@ export default function SuperAdminPage() {
         {activeTab === 'analytics' && (
           <div className="bg-white rounded-lg shadow p-6">
             <h3 className="text-lg font-medium text-gray-900 mb-4">Analytics</h3>
-            <p className="text-gray-600">Dashboard de analytics em desenvolvimento...</p>
+            <p className="text-gray-500">Funcionalidade em desenvolvimento...</p>
           </div>
         )}
 
         {activeTab === 'settings' && (
           <div className="bg-white rounded-lg shadow p-6">
-            <h3 className="text-lg font-medium text-gray-900 mb-4">Configurações do Sistema</h3>
-            <p className="text-gray-600">Configurações do sistema em desenvolvimento...</p>
+            <h3 className="text-lg font-medium text-gray-900 mb-4">Configurações</h3>
+            <p className="text-gray-500">Funcionalidade em desenvolvimento...</p>
           </div>
         )}
       </div>
+
+      {/* Invite Modal */}
+      {showInviteModal && selectedClient && (
+        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+          <div className="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
+            <div className="mt-3">
+              <h3 className="text-lg font-medium text-gray-900 mb-4">
+                Gerar Convite para {selectedClient.business_name}
+              </h3>
+              
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Nome do Cliente (opcional)
+                  </label>
+                  <input
+                    type="text"
+                    value={inviteForm.client_name}
+                    onChange={(e) => setInviteForm(prev => ({ ...prev, client_name: e.target.value }))}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    placeholder="Nome do cliente"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    E-mail do Cliente (opcional)
+                  </label>
+                  <input
+                    type="email"
+                    value={inviteForm.client_email}
+                    onChange={(e) => setInviteForm(prev => ({ ...prev, client_email: e.target.value }))}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    placeholder="cliente@email.com"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Expira em (horas)
+                  </label>
+                  <select
+                    value={inviteForm.expires_in_hours}
+                    onChange={(e) => setInviteForm(prev => ({ ...prev, expires_in_hours: parseInt(e.target.value) }))}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  >
+                    <option value={1}>1 hora</option>
+                    <option value={24}>24 horas</option>
+                    <option value={48}>48 horas</option>
+                    <option value={168}>1 semana</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end space-x-3 mt-6">
+                <button
+                  onClick={() => setShowInviteModal(false)}
+                  className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors duration-200"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={generateInvite}
+                  className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors duration-200"
+                >
+                  Gerar Convite
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Create Client Modal */}
       {showCreateForm && (
@@ -393,24 +549,25 @@ export default function SuperAdminPage() {
           <div className="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
             <div className="mt-3">
               <h3 className="text-lg font-medium text-gray-900 mb-4">Criar Novo Cliente</h3>
-              <p className="text-gray-600 mb-4">
-                Use o script de criação para adicionar novos clientes ao sistema.
+              <p className="text-gray-500 mb-4">
+                Use o formulário completo para criar novos clientes com todos os detalhes.
               </p>
-              <div className="flex justify-end space-x-3">
+              
+              <div className="flex items-center justify-end space-x-3">
                 <button
                   onClick={() => setShowCreateForm(false)}
-                  className="btn-secondary"
+                  className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors duration-200"
                 >
                   Fechar
                 </button>
                 <button
                   onClick={() => {
                     setShowCreateForm(false)
-                    // Aqui você abriria o formulário de criação
+                    window.location.href = '/super-admin/create-client'
                   }}
-                  className="btn-primary"
+                  className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors duration-200"
                 >
-                  Criar Cliente
+                  Ir para Formulário
                 </button>
               </div>
             </div>
